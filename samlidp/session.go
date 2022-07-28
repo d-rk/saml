@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/pkg/errors"
 	"net/http"
 	"text/template"
 	"time"
@@ -96,6 +97,33 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request, req *saml.Id
 	}
 
 	s.sendLoginForm(w, r, req, "")
+	return nil
+}
+
+func (s *Server) InvalidateSession(r *http.Request, req *saml.IdpLogoutRequest) error {
+
+	if sessionCookie, err := r.Cookie("session"); err == nil {
+		session := &saml.Session{}
+		if err := s.Store.Get(fmt.Sprintf("/sessions/%s", sessionCookie.Value), session); err != nil {
+			return err
+		}
+
+		if saml.TimeNow().After(session.ExpireTime) {
+			return err
+		}
+
+		if req.Request.NameID.Value != (session.NameID) {
+			return errors.Errorf("nameId mismatch: %s != %s", req.Request.NameID.Value, session.NameID)
+		}
+
+		err := s.Store.Delete(fmt.Sprintf("/sessions/%s", session.ID))
+		if err != nil {
+			return err
+		}
+	} else {
+		return errors.New("session cookie not found")
+	}
+
 	return nil
 }
 

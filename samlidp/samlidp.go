@@ -49,6 +49,10 @@ func New(opts Options) (*Server, error) {
 	metadataURL.Path = metadataURL.Path + "/metadata"
 	ssoURL := opts.URL
 	ssoURL.Path = ssoURL.Path + "/sso"
+
+	logoutURL := opts.URL
+	logoutURL.Path = logoutURL.Path + "/logout"
+
 	logr := opts.Logger
 	if logr == nil {
 		logr = logger.DefaultLogger
@@ -62,6 +66,7 @@ func New(opts Options) (*Server, error) {
 			Certificate: opts.Certificate,
 			MetadataURL: metadataURL,
 			SSOURL:      ssoURL,
+			LogoutURL:   logoutURL,
 		},
 		logger: logr,
 		Store:  opts.Store,
@@ -93,6 +98,12 @@ func (s *Server) InitializeHTTP() {
 		s.idpConfigMu.RLock()
 		defer s.idpConfigMu.RUnlock()
 		s.IDP.ServeSSO(w, r)
+	})
+
+	mux.Handle("/logout", func(w http.ResponseWriter, r *http.Request) {
+		s.idpConfigMu.RLock()
+		defer s.idpConfigMu.RUnlock()
+		s.IDP.ServeLogout(w, r)
 	})
 
 	mux.Handle("/login", s.HandleLogin)

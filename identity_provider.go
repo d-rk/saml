@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -57,6 +58,8 @@ type SessionProvider interface {
 	// If (and only if) the request is not associated with a session then GetSession
 	// must complete the HTTP request and return nil.
 	GetSession(w http.ResponseWriter, r *http.Request, req *IdpAuthnRequest) *Session
+
+	InvalidateSession(r *http.Request, req *IdpLogoutRequest) error
 }
 
 // ServiceProviderProvider is an interface used by IdentityProvider to look up
@@ -190,6 +193,7 @@ func (idp *IdentityProvider) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(idp.MetadataURL.Path, idp.ServeMetadata)
 	mux.HandleFunc(idp.SSOURL.Path, idp.ServeSSO)
+	mux.HandleFunc(idp.LogoutURL.Path, idp.ServeLogout)
 	return mux
 }
 
@@ -253,6 +257,52 @@ func (idp *IdentityProvider) ServeSSO(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+}
+
+func (idp *IdentityProvider) ServeLogout(w http.ResponseWriter, r *http.Request) {
+	req, err := NewIdpLogoutRequest(idp, r)
+	if err != nil {
+		idp.Logger.Printf("failed to parse request: %s", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		idp.Logger.Printf("failed to validate request: %s", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	if err := idp.SessionProvider.InvalidateSession(r, req); err != nil {
+		idp.Logger.Printf("failed to invalidate session: %s", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	response := LogoutResponse{
+		Destination:  req.LogoutService.Location,
+		ID:           fmt.Sprintf("id-%x", randomBytes(20)),
+		IssueInstant: req.Now,
+		Version:      "2.0",
+		Issuer: &Issuer{
+			Format: "urn:oasis:names:tc:SAML:2.0:nameid-format:entity",
+			Value:  req.IDP.MetadataURL.String(),
+		},
+		Status: Status{
+			StatusCode: StatusCode{
+				Value: StatusSuccess,
+			},
+		},
+	}
+
+	redirect := response.Redirect("")
+	if err != nil {
+		idp.Logger.Printf("failed to generate redirect: %s", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
+
+	w.Header().Add("Location", redirect.String())
+	w.WriteHeader(http.StatusFound)
 }
 
 // ServeIDPInitiated handes an IDP-initiated authorization request. Requests of this
@@ -540,6 +590,114 @@ func (req *IdpAuthnRequest) getACSEndpoint() error {
 	}
 
 	return os.ErrNotExist // no ACS url found or specified
+}
+
+// IdpLogoutRequest is used by IdentityProvider to handle a single logout request.
+type IdpLogoutRequest struct {
+	IDP           *IdentityProvider
+	HTTPRequest   *http.Request
+	RelayState    string
+	RequestBuffer []byte
+	Request       LogoutRequest
+	LogoutService *Endpoint
+	Now           time.Time
+}
+
+// NewIdpLogoutRequest returns a new IdpLogoutRequest for the given HTTP request to the authorization
+// service.
+func NewIdpLogoutRequest(idp *IdentityProvider, r *http.Request) (*IdpLogoutRequest, error) {
+	req := &IdpLogoutRequest{
+		IDP:         idp,
+		HTTPRequest: r,
+		Now:         TimeNow(),
+	}
+
+	switch r.Method {
+	case "GET":
+		compressedRequest, err := base64.StdEncoding.DecodeString(r.URL.Query().Get("SAMLRequest"))
+		if err != nil {
+			return nil, fmt.Errorf("cannot decode request: %s", err)
+		}
+		req.RequestBuffer, err = ioutil.ReadAll(flate.NewReader(bytes.NewReader(compressedRequest)))
+		if err != nil {
+			return nil, fmt.Errorf("cannot decompress request: %s", err)
+		}
+		req.RelayState = r.URL.Query().Get("RelayState")
+	default:
+		return nil, fmt.Errorf("method not allowed")
+	}
+
+	return req, nil
+}
+
+// Validate checks that the logout request is valid and assigns
+// the LogoutRequest and Metadata properties. Returns a non-nil error if the
+// request is not valid.
+func (req *IdpLogoutRequest) Validate() error {
+	if err := xrv.Validate(bytes.NewReader(req.RequestBuffer)); err != nil {
+		return err
+	}
+
+	if err := xml.Unmarshal(req.RequestBuffer, &req.Request); err != nil {
+		return err
+	}
+
+	// We always have exactly one IDP SSO descriptor
+	if len(req.IDP.Metadata().IDPSSODescriptors) != 1 {
+		panic("expected exactly one IDP SSO descriptor in IDP metadata")
+	}
+	idpSsoDescriptor := req.IDP.Metadata().IDPSSODescriptors[0]
+
+	// In http://docs.oasis-open.org/security/saml/v2.0/saml-bindings-2.0-os.pdf §3.4.5.2
+	// we get a description of the Destination attribute:
+	//
+	//   If the message is signed, the Destination XML attribute in the root SAML
+	//   element of the protocol message MUST contain the URL to which the sender
+	//   has instructed the user agent to deliver the message. The recipient MUST
+	//   then verify that the value matches the location at which the message has
+	//   been received.
+	//
+	// We require the destination be correct either (a) if signing is enabled or
+	// (b) if it was provided.
+	mustHaveDestination := idpSsoDescriptor.WantAuthnRequestsSigned != nil && *idpSsoDescriptor.WantAuthnRequestsSigned
+	mustHaveDestination = mustHaveDestination || req.Request.Destination != ""
+	if mustHaveDestination {
+		if req.Request.Destination != req.IDP.LogoutURL.String() {
+			return fmt.Errorf("expected destination to be %q, not %q", req.IDP.SSOURL.String(), req.Request.Destination)
+		}
+	}
+
+	if req.Request.IssueInstant.Add(MaxIssueDelay).Before(req.Now) {
+		return fmt.Errorf("request expired at %s",
+			req.Request.IssueInstant.Add(MaxIssueDelay))
+	}
+	if req.Request.Version != "2.0" {
+		return fmt.Errorf("expected SAML request version 2.0 got %v", req.Request.Version)
+	}
+
+	// find the service provider
+	serviceProviderID := req.Request.Issuer.Value
+	serviceProvider, err := req.IDP.ServiceProviderProvider.GetServiceProvider(req.HTTPRequest, serviceProviderID)
+	if err == os.ErrNotExist {
+		return fmt.Errorf("cannot handle request from unknown service provider %s", serviceProviderID)
+	} else if err != nil {
+		return fmt.Errorf("cannot find service provider %s: %v", serviceProviderID, err)
+	}
+
+	for _, descriptor := range serviceProvider.SPSSODescriptors {
+		for _, service := range descriptor.SingleLogoutServices {
+			if service.Binding == HTTPRedirectBinding {
+				req.LogoutService = &service
+				break
+			}
+		}
+	}
+
+	if req.LogoutService == nil {
+		return errors.New("unable to find service logout endpoint")
+	}
+
+	return nil
 }
 
 // DefaultAssertionMaker produces a SAML assertion for the
