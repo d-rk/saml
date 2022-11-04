@@ -504,6 +504,9 @@ func (req *IdpAuthnRequest) Validate() error {
 
 func (req *IdpAuthnRequest) getACSEndpoint() error {
 	if req.Request.AssertionConsumerServiceIndex != "" {
+
+		req.IDP.Logger.Printf("getACSEndpoint() with AssertionConsumerServiceIndex=%s", req.Request.AssertionConsumerServiceIndex)
+
 		for _, spssoDescriptor := range req.ServiceProviderMetadata.SPSSODescriptors {
 			for _, spAssertionConsumerService := range spssoDescriptor.AssertionConsumerServices {
 				if strconv.Itoa(spAssertionConsumerService.Index) == req.Request.AssertionConsumerServiceIndex {
@@ -518,12 +521,17 @@ func (req *IdpAuthnRequest) getACSEndpoint() error {
 					req.SPSSODescriptor = &spssoDescriptor
 					req.ACSEndpoint = &spAssertionConsumerService
 					return nil
+				} else {
+					req.IDP.Logger.Printf("AssertionConsumerService with index=%d seen", spAssertionConsumerService.Index)
 				}
 			}
 		}
 	}
 
 	if req.Request.AssertionConsumerServiceURL != "" {
+
+		req.IDP.Logger.Printf("getACSEndpoint() with AssertionConsumerServiceURL=%s", req.Request.AssertionConsumerServiceURL)
+
 		for _, spssoDescriptor := range req.ServiceProviderMetadata.SPSSODescriptors {
 			for _, spAssertionConsumerService := range spssoDescriptor.AssertionConsumerServices {
 				if spAssertionConsumerService.Location == req.Request.AssertionConsumerServiceURL {
@@ -538,6 +546,8 @@ func (req *IdpAuthnRequest) getACSEndpoint() error {
 					req.SPSSODescriptor = &spssoDescriptor
 					req.ACSEndpoint = &spAssertionConsumerService
 					return nil
+				} else {
+					req.IDP.Logger.Printf("AssertionConsumerService with url=%s seen", spAssertionConsumerService.Location)
 				}
 			}
 		}
@@ -564,6 +574,8 @@ func (req *IdpAuthnRequest) getACSEndpoint() error {
 						req.ACSEndpoint = &spAssertionConsumerService
 						return nil
 					}
+				} else {
+					req.IDP.Logger.Printf("AssertionConsumerService with IsDefault=false Binding=%s seen", spAssertionConsumerService.Binding)
 				}
 			}
 		}
@@ -584,6 +596,8 @@ func (req *IdpAuthnRequest) getACSEndpoint() error {
 					req.SPSSODescriptor = &spssoDescriptor
 					req.ACSEndpoint = &spAssertionConsumerService
 					return nil
+				default:
+					req.IDP.Logger.Printf("AssertionConsumerService with Binding=%s seen", spAssertionConsumerService.Binding)
 				}
 			}
 		}
