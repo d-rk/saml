@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -108,6 +107,7 @@ type IdentityProvider struct {
 	AssertionMaker          AssertionMaker
 	SignatureMethod         string
 	ValidDuration           *time.Duration
+	UseNameFormatBasic      bool
 }
 
 // Metadata returns the metadata structure for this identity provider.
@@ -245,7 +245,7 @@ func (idp *IdentityProvider) ServeSSO(w http.ResponseWriter, r *http.Request) {
 
 	assertionMaker := idp.AssertionMaker
 	if assertionMaker == nil {
-		assertionMaker = DefaultAssertionMaker{}
+		assertionMaker = DefaultAssertionMaker{UseNameFormatBasic: idp.UseNameFormatBasic}
 	}
 	if err := assertionMaker.MakeAssertion(req, session); err != nil {
 		idp.Logger.Printf("failed to make assertion: %s", err)
@@ -295,7 +295,7 @@ func (idp *IdentityProvider) ServeLogout(w http.ResponseWriter, r *http.Request)
 		},
 	}
 
-	redirect := response.Redirect("")
+	redirect := response.Redirect(req.RelayState)
 	if err != nil {
 		idp.Logger.Printf("failed to generate redirect: %s", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -694,7 +694,7 @@ func (req *IdpLogoutRequest) Validate() error {
 	}
 
 	if req.LogoutService == nil {
-		return errors.New("unable to find service logout endpoint")
+		return fmt.Errorf("unable to find service logout endpoint with binding %s", HTTPRedirectBinding)
 	}
 
 	return nil
@@ -703,11 +703,12 @@ func (req *IdpLogoutRequest) Validate() error {
 // DefaultAssertionMaker produces a SAML assertion for the
 // given request and assigns it to req.Assertion.
 type DefaultAssertionMaker struct {
+	UseNameFormatBasic bool
 }
 
 // MakeAssertion implements AssertionMaker. It produces a SAML assertion from the
 // given request and assigns it to req.Assertion.
-func (DefaultAssertionMaker) MakeAssertion(req *IdpAuthnRequest, session *Session) error {
+func (m DefaultAssertionMaker) MakeAssertion(req *IdpAuthnRequest, session *Session) error {
 	attributes := []Attribute{}
 
 	var attributeConsumingService *AttributeConsumingService
@@ -803,73 +804,139 @@ func (DefaultAssertionMaker) MakeAssertion(req *IdpAuthnRequest, session *Sessio
 	}
 
 	if session.UserName != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "uid",
-			Name:         "urn:oid:0.9.2342.19200300.100.1.1",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserName,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "uid",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserName,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "uid",
+				Name:         "urn:oid:0.9.2342.19200300.100.1.1",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserName,
+				}},
+			})
+		}
 	}
 
 	if session.UserEmail != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "eduPersonPrincipalName",
-			Name:         "urn:oid:1.3.6.1.4.1.5923.1.1.1.6",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserEmail,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "eduPersonPrincipalName",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserEmail,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "eduPersonPrincipalName",
+				Name:         "urn:oid:1.3.6.1.4.1.5923.1.1.1.6",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserEmail,
+				}},
+			})
+		}
 	}
 	if session.UserSurname != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "sn",
-			Name:         "urn:oid:2.5.4.4",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserSurname,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "sn",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserSurname,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "sn",
+				Name:         "urn:oid:2.5.4.4",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserSurname,
+				}},
+			})
+		}
 	}
 	if session.UserGivenName != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "givenName",
-			Name:         "urn:oid:2.5.4.42",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserGivenName,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "givenName",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserGivenName,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "givenName",
+				Name:         "urn:oid:2.5.4.42",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserGivenName,
+				}},
+			})
+		}
 	}
 
 	if session.UserCommonName != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "cn",
-			Name:         "urn:oid:2.5.4.3",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserCommonName,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "cn",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserCommonName,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "cn",
+				Name:         "urn:oid:2.5.4.3",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserCommonName,
+				}},
+			})
+		}
 	}
 
 	if session.UserScopedAffiliation != "" {
-		attributes = append(attributes, Attribute{
-			FriendlyName: "uid",
-			Name:         "urn:oid:1.3.6.1.4.1.5923.1.1.1.9",
-			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
-			Values: []AttributeValue{{
-				Type:  "xs:string",
-				Value: session.UserScopedAffiliation,
-			}},
-		})
+		if m.UseNameFormatBasic {
+			attributes = append(attributes, Attribute{
+				Name:       "uid",
+				NameFormat: "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserScopedAffiliation,
+				}},
+			})
+		} else {
+			attributes = append(attributes, Attribute{
+				FriendlyName: "uid",
+				Name:         "urn:oid:1.3.6.1.4.1.5923.1.1.1.9",
+				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:uri",
+				Values: []AttributeValue{{
+					Type:  "xs:string",
+					Value: session.UserScopedAffiliation,
+				}},
+			})
+		}
 	}
 
 	for _, ca := range session.CustomAttributes {

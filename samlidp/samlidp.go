@@ -17,23 +17,24 @@ import (
 
 // Options represent the parameters to New() for creating a new IDP server
 type Options struct {
-	URL         url.URL
-	Key         crypto.PrivateKey
-	Logger      logger.Interface
-	Certificate *x509.Certificate
-	Store       Store
+	URL                url.URL
+	Key                crypto.PrivateKey
+	Logger             logger.Interface
+	Certificate        *x509.Certificate
+	Store              Store
+	UseNameFormatBasic bool
 }
 
 // Server represents an IDP server. The server provides the following URLs:
 //
-//     /metadata     - the SAML metadata
-//     /sso          - the SAML endpoint to initiate an authentication flow
-//     /login        - prompt for a username and password if no session established
-//     /login/:shortcut - kick off an IDP-initiated authentication flow
-//     /services     - RESTful interface to Service objects
-//     /users        - RESTful interface to User objects
-//     /sessions     - RESTful interface to Session objects
-//     /shortcuts    - RESTful interface to Shortcut objects
+//	/metadata     - the SAML metadata
+//	/sso          - the SAML endpoint to initiate an authentication flow
+//	/login        - prompt for a username and password if no session established
+//	/login/:shortcut - kick off an IDP-initiated authentication flow
+//	/services     - RESTful interface to Service objects
+//	/users        - RESTful interface to User objects
+//	/sessions     - RESTful interface to Session objects
+//	/shortcuts    - RESTful interface to Shortcut objects
 type Server struct {
 	http.Handler
 	idpConfigMu      sync.RWMutex // protects calls into the IDP
@@ -61,12 +62,13 @@ func New(opts Options) (*Server, error) {
 	s := &Server{
 		serviceProviders: map[string]*saml.EntityDescriptor{},
 		IDP: saml.IdentityProvider{
-			Key:         opts.Key,
-			Logger:      logr,
-			Certificate: opts.Certificate,
-			MetadataURL: metadataURL,
-			SSOURL:      ssoURL,
-			LogoutURL:   logoutURL,
+			Key:                opts.Key,
+			Logger:             logr,
+			Certificate:        opts.Certificate,
+			MetadataURL:        metadataURL,
+			SSOURL:             ssoURL,
+			LogoutURL:          logoutURL,
+			UseNameFormatBasic: opts.UseNameFormatBasic,
 		},
 		logger: logr,
 		Store:  opts.Store,
