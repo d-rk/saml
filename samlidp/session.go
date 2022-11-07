@@ -133,17 +133,25 @@ func (s *Server) InvalidateSession(r *http.Request, req *saml.IdpLogoutRequest) 
 // back to the IDP authorize URL to restart the SAML login flow, this time establishing a
 // session based on the credentials that were provided.
 func (s *Server) sendLoginForm(w http.ResponseWriter, r *http.Request, req *saml.IdpAuthnRequest, toast string) {
-	tmpl := template.Must(template.New("saml-post-form").Parse(`` +
-		`<html>` +
-		`<p>{{.Toast}}</p>` +
-		`<form method="post" action="{{.URL}}">` +
-		`<input type="text" name="user" placeholder="user" value="" />` +
-		`<input type="password" name="password" placeholder="password" value="" />` +
-		`<input type="hidden" name="SAMLRequest" value="{{.SAMLRequest}}" />` +
-		`<input type="hidden" name="RelayState" value="{{.RelayState}}" />` +
-		`<input type="submit" value="Log In" />` +
-		`</form>` +
-		`</html>`))
+
+	var tmpl *template.Template
+
+	if s.LoginFormTemplate != "" {
+		tmpl = template.Must(template.New("saml-post-form").Parse(s.LoginFormTemplate))
+	} else {
+		tmpl = template.Must(template.New("saml-post-form").Parse(`` +
+			`<html>` +
+			`<p>{{.Toast}}</p>` +
+			`<form method="post" action="{{.URL}}">` +
+			`<input type="text" name="user" placeholder="user" value="" />` +
+			`<input type="password" name="password" placeholder="password" value="" />` +
+			`<input type="hidden" name="SAMLRequest" value="{{.SAMLRequest}}" />` +
+			`<input type="hidden" name="RelayState" value="{{.RelayState}}" />` +
+			`<input type="submit" value="Log In" />` +
+			`</form>` +
+			`</html>`))
+	}
+
 	data := struct {
 		Toast       string
 		URL         string

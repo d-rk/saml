@@ -23,6 +23,7 @@ type Options struct {
 	Certificate        *x509.Certificate
 	Store              Store
 	UseNameFormatBasic bool
+	LoginFormTemplate  string
 }
 
 // Server represents an IDP server. The server provides the following URLs:
@@ -37,11 +38,12 @@ type Options struct {
 //	/shortcuts    - RESTful interface to Shortcut objects
 type Server struct {
 	http.Handler
-	idpConfigMu      sync.RWMutex // protects calls into the IDP
-	logger           logger.Interface
-	serviceProviders map[string]*saml.EntityDescriptor
-	IDP              saml.IdentityProvider // the underlying IDP
-	Store            Store                 // the data store
+	idpConfigMu       sync.RWMutex // protects calls into the IDP
+	logger            logger.Interface
+	serviceProviders  map[string]*saml.EntityDescriptor
+	IDP               saml.IdentityProvider // the underlying IDP
+	Store             Store                 // the data store
+	LoginFormTemplate string
 }
 
 // New returns a new Server
@@ -70,8 +72,9 @@ func New(opts Options) (*Server, error) {
 			LogoutURL:          logoutURL,
 			UseNameFormatBasic: opts.UseNameFormatBasic,
 		},
-		logger: logr,
-		Store:  opts.Store,
+		logger:            logr,
+		Store:             opts.Store,
+		LoginFormTemplate: opts.LoginFormTemplate,
 	}
 
 	s.IDP.SessionProvider = s
