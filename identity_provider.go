@@ -295,13 +295,16 @@ func (idp *IdentityProvider) ServeLogout(w http.ResponseWriter, r *http.Request)
 		},
 	}
 
-	redirect := response.Redirect(req.RelayState)
-	if err != nil {
-		idp.Logger.Printf("failed to generate redirect: %s", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		HttpOnly: true,
+	})
 
-	w.Header().Add("Location", redirect.String())
+	redirect := response.Redirect(req.RelayState)
+	w.Header().Set("Location", redirect.String())
 	w.WriteHeader(http.StatusFound)
 }
 
